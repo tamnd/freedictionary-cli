@@ -6,19 +6,16 @@
 // between requests keeps the client within the free-tier rate limits.
 package freedictionary
 
-// Definition is one meaning's definition record produced by the Define call.
-// Each entry in the API response array times each meaning yields one Definition.
+// Definition is one record produced by the Lookup call.
+// Each entry in the API response, times each meaning, times each definition
+// yields one Definition record.
 type Definition struct {
-	Word         string   `kit:"id" json:"word"`
-	Phonetic     string   `json:"phonetic"`
-	Audio        string   `json:"audio"`
-	PartOfSpeech string   `json:"part_of_speech"`
-	Definition   string   `json:"definition"`
-	Example      string   `json:"example"`
-	Synonyms     []string `json:"synonyms"`
-	Antonyms     []string `json:"antonyms"`
-	Language     string   `json:"language"`
-	SourceURL    string   `json:"source_url"`
+	Word         string `kit:"id" json:"word"`
+	PartOfSpeech string `json:"part_of_speech"`
+	Definition   string `json:"definition"`
+	Example      string `json:"example"`
+	Synonyms     string `json:"synonyms"` // comma-joined, up to 5
+	Phonetic     string `json:"phonetic"`
 }
 
 // wireEntry is the wire shape returned by the Free Dictionary API for one word

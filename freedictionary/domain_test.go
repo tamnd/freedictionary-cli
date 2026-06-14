@@ -60,72 +60,66 @@ func TestBestPhonetic(t *testing.T) {
 	}
 
 	cases := []struct {
-		name      string
-		phonetics []ph
-		wantText  string
-		wantAudio string
+		name     string
+		input    []ph
+		wantText string
 	}{
+		{name: "empty slice", input: nil, wantText: ""},
 		{
-			name:      "empty slice",
-			phonetics: nil,
-			wantText:  "",
-			wantAudio: "",
-		},
-		{
-			name:      "first has audio",
-			phonetics: []ph{{Text: "/hɛloʊ/", Audio: "https://example.com/hello.mp3"}},
-			wantText:  "/hɛloʊ/",
-			wantAudio: "https://example.com/hello.mp3",
+			name:     "first has audio",
+			input:    []ph{{Text: "/hɛloʊ/", Audio: "https://example.com/hello.mp3"}},
+			wantText: "/hɛloʊ/",
 		},
 		{
 			name: "second has audio",
-			phonetics: []ph{
+			input: []ph{
 				{Text: "/hɛloʊ/", Audio: ""},
 				{Text: "/həˈloʊ/", Audio: "https://example.com/hello-us.mp3"},
 			},
-			wantText:  "/həˈloʊ/",
-			wantAudio: "https://example.com/hello-us.mp3",
+			wantText: "/həˈloʊ/",
 		},
 		{
-			name:      "no audio fallback to first text",
-			phonetics: []ph{{Text: "/hɛloʊ/", Audio: ""}, {Text: "/həˈloʊ/", Audio: ""}},
-			wantText:  "/hɛloʊ/",
-			wantAudio: "",
+			name:     "no audio fallback to first text",
+			input:    []ph{{Text: "/hɛloʊ/", Audio: ""}, {Text: "/həˈloʊ/", Audio: ""}},
+			wantText: "/hɛloʊ/",
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			// Adapt to the unexported struct slice type used by bestPhonetic.
 			adapted := make([]struct {
 				Text  string `json:"text"`
 				Audio string `json:"audio"`
-			}, len(tc.phonetics))
-			for i, p := range tc.phonetics {
+			}, len(tc.input))
+			for i, p := range tc.input {
 				adapted[i].Text = p.Text
 				adapted[i].Audio = p.Audio
 			}
-			gotText, gotAudio := bestPhonetic(adapted)
-			if gotText != tc.wantText {
-				t.Errorf("text = %q, want %q", gotText, tc.wantText)
-			}
-			if gotAudio != tc.wantAudio {
-				t.Errorf("audio = %q, want %q", gotAudio, tc.wantAudio)
+			got := bestPhonetic(adapted)
+			if got != tc.wantText {
+				t.Errorf("text = %q, want %q", got, tc.wantText)
 			}
 		})
 	}
 }
 
-func TestUnique(t *testing.T) {
-	got := unique([]string{"b", "a", "b", "", "c", "a"})
-	want := []string{"a", "b", "c"}
-	if len(got) != len(want) {
-		t.Fatalf("unique = %v, want %v", got, want)
+func TestJoinSynonyms(t *testing.T) {
+	// deduplication
+	got := joinSynonyms([]string{"hi", "hey"}, []string{"hey", "howdy"}, 5)
+	if got != "hi, hey, howdy" {
+		t.Errorf("joinSynonyms = %q, want %q", got, "hi, hey, howdy")
 	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Errorf("unique[%d] = %q, want %q", i, got[i], want[i])
-		}
+
+	// max cap
+	got = joinSynonyms([]string{"a", "b", "c"}, []string{"d", "e", "f"}, 4)
+	if got != "a, b, c, d" {
+		t.Errorf("joinSynonyms max = %q, want %q", got, "a, b, c, d")
+	}
+
+	// empty inputs
+	got = joinSynonyms(nil, nil, 5)
+	if got != "" {
+		t.Errorf("joinSynonyms empty = %q, want empty", got)
 	}
 }
 
@@ -159,6 +153,7 @@ func TestToDefinitions(t *testing.T) {
 					Antonyms   []string `json:"antonyms"`
 				}{
 					{Definition: "a procedure for assessment", Example: "take a test", Synonyms: []string{"exam"}, Antonyms: []string{}},
+					{Definition: "a short examination", Example: "pass the test", Synonyms: []string{"quiz"}, Antonyms: []string{}},
 				},
 				Synonyms: []string{"trial"},
 				Antonyms: []string{},
@@ -180,9 +175,10 @@ func TestToDefinitions(t *testing.T) {
 		SourceUrls: []string{"https://en.wiktionary.org/wiki/test"},
 	}
 
-	defs := toDefinitions(entry, "en")
-	if len(defs) != 2 {
-		t.Fatalf("len(defs) = %d, want 2", len(defs))
+	// 2 noun defs + 1 verb def = 3 records
+	defs := toDefinitions(entry)
+	if len(defs) != 3 {
+		t.Fatalf("len(defs) = %d, want 3", len(defs))
 	}
 
 	d := defs[0]
@@ -198,23 +194,13 @@ func TestToDefinitions(t *testing.T) {
 	if d.Example != "take a test" {
 		t.Errorf("Example = %q", d.Example)
 	}
-	if d.Audio != "https://example.com/test.mp3" {
-		t.Errorf("Audio = %q", d.Audio)
-	}
-	if d.Language != "en" {
-		t.Errorf("Language = %q, want en", d.Language)
-	}
-	if d.SourceURL != "https://en.wiktionary.org/wiki/test" {
-		t.Errorf("SourceURL = %q", d.SourceURL)
-	}
-	// synonyms from meaning + definition merged and sorted
-	wantSyns := []string{"exam", "trial"}
-	if len(d.Synonyms) != len(wantSyns) {
-		t.Errorf("Synonyms = %v, want %v", d.Synonyms, wantSyns)
+	// meaning synonym "trial" + definition synonym "exam" merged
+	if d.Synonyms == "" {
+		t.Error("Synonyms should not be empty")
 	}
 
-	d2 := defs[1]
+	d2 := defs[2]
 	if d2.PartOfSpeech != "verb" {
-		t.Errorf("defs[1].PartOfSpeech = %q, want verb", d2.PartOfSpeech)
+		t.Errorf("defs[2].PartOfSpeech = %q, want verb", d2.PartOfSpeech)
 	}
 }

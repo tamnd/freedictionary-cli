@@ -29,8 +29,8 @@ func (Domain) Info() kit.DomainInfo {
 		Identity: kit.Identity{
 			Binary: "freedictionary",
 			Short:  "Look up word definitions from the Free Dictionary API",
-			Long: `freedictionary looks up word definitions from api.dictionaryapi.dev.
-No API key required. Supports English and 11 other languages.`,
+			Long: `freedictionary looks up English word definitions from api.dictionaryapi.dev.
+No API key required.`,
 			Site: Host,
 			Repo: "https://github.com/tamnd/freedictionary-cli",
 		},
@@ -42,12 +42,12 @@ func (Domain) Register(app *kit.App) {
 	app.SetClient(newClient)
 
 	kit.Handle(app, kit.OpMeta{
-		Name:    "define",
+		Name:    "word",
 		Group:   "read",
 		List:    true,
-		Summary: "Look up a word's definitions",
+		Summary: "Look up definitions for a word",
 		Args:    []kit.Arg{{Name: "word", Help: "word to define"}},
-	}, defineOp)
+	}, wordOp)
 }
 
 // newClient builds the client from host-resolved config.
@@ -67,20 +67,15 @@ func newClient(_ context.Context, cfg kit.Config) (any, error) {
 
 // --- inputs ---
 
-type defineInput struct {
+type wordInput struct {
 	Word   string  `kit:"arg" help:"word to define"`
-	Lang   string  `kit:"flag" help:"language code (en, es, fr, de, it, ru, ar, hi, ja, ko, pt-BR, tr)" default:"en"`
 	Client *Client `kit:"inject"`
 }
 
 // --- handlers ---
 
-func defineOp(ctx context.Context, in defineInput, emit func(Definition) error) error {
-	lang := in.Lang
-	if lang == "" {
-		lang = "en"
-	}
-	defs, err := in.Client.Define(ctx, in.Word, lang)
+func wordOp(ctx context.Context, in wordInput, emit func(Definition) error) error {
+	defs, err := in.Client.Lookup(ctx, in.Word)
 	if err != nil {
 		return err
 	}
@@ -104,7 +99,7 @@ func (Domain) Classify(input string) (uriType, id string, err error) {
 	return "word", input, nil
 }
 
-// Locate returns the canonical dictionary.com URL for a word.
+// Locate returns a reference URL for a word.
 func (Domain) Locate(uriType, id string) (string, error) {
 	switch uriType {
 	case "word":

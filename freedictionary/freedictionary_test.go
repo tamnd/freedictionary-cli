@@ -5,12 +5,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/tamnd/freedictionary-cli/freedictionary"
 )
 
-const fakeDefineJSON = `[
+const fakeLookupJSON = `[
   {
     "word": "hello",
     "phonetic": "/hɛloʊ/",
@@ -22,7 +23,8 @@ const fakeDefineJSON = `[
       {
         "partOfSpeech": "exclamation",
         "definitions": [
-          {"definition": "Used as a greeting.", "example": "Hello there!", "synonyms": ["hi"], "antonyms": []}
+          {"definition": "Used as a greeting.", "example": "Hello there!", "synonyms": ["hi"], "antonyms": []},
+          {"definition": "Used to attract attention.", "example": "Hello? Anyone there?", "synonyms": [], "antonyms": []}
         ],
         "synonyms": ["howdy"],
         "antonyms": []
@@ -49,16 +51,16 @@ func newTestClient(ts *httptest.Server) *freedictionary.Client {
 	return freedictionary.NewClient(cfg)
 }
 
-func TestDefineSendsUA(t *testing.T) {
+func TestLookupSendsUA(t *testing.T) {
 	var gotUA string
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotUA = r.Header.Get("User-Agent")
-		_, _ = fmt.Fprint(w, fakeDefineJSON)
+		_, _ = fmt.Fprint(w, fakeLookupJSON)
 	}))
 	defer ts.Close()
 
 	c := newTestClient(ts)
-	_, err := c.Define(context.Background(), "hello", "en")
+	_, err := c.Lookup(context.Background(), "hello")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,16 +69,16 @@ func TestDefineSendsUA(t *testing.T) {
 	}
 }
 
-func TestDefineURL(t *testing.T) {
+func TestLookupURL(t *testing.T) {
 	var gotPath string
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
-		_, _ = fmt.Fprint(w, fakeDefineJSON)
+		_, _ = fmt.Fprint(w, fakeLookupJSON)
 	}))
 	defer ts.Close()
 
 	c := newTestClient(ts)
-	_, err := c.Define(context.Background(), "hello", "en")
+	_, err := c.Lookup(context.Background(), "hello")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,38 +88,22 @@ func TestDefineURL(t *testing.T) {
 	}
 }
 
-func TestDefineURLLang(t *testing.T) {
-	var gotPath string
+// TestLookupExpandsDefinitions checks that one record is emitted per
+// (meaning x definition) pair, not one per meaning.
+func TestLookupExpandsDefinitions(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
-		_, _ = fmt.Fprint(w, fakeDefineJSON)
+		_, _ = fmt.Fprint(w, fakeLookupJSON)
 	}))
 	defer ts.Close()
 
 	c := newTestClient(ts)
-	_, err := c.Define(context.Background(), "bonjour", "fr")
+	defs, err := c.Lookup(context.Background(), "hello")
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "/api/v2/entries/fr/bonjour"
-	if gotPath != want {
-		t.Errorf("path = %q, want %q", gotPath, want)
-	}
-}
-
-func TestDefineParsesMeanings(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = fmt.Fprint(w, fakeDefineJSON)
-	}))
-	defer ts.Close()
-
-	c := newTestClient(ts)
-	defs, err := c.Define(context.Background(), "hello", "en")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(defs) != 2 {
-		t.Fatalf("len(defs) = %d, want 2", len(defs))
+	// exclamation has 2 defs, noun has 1 def -> total 3
+	if len(defs) != 3 {
+		t.Fatalf("len(defs) = %d, want 3", len(defs))
 	}
 
 	d := defs[0]
@@ -133,18 +119,34 @@ func TestDefineParsesMeanings(t *testing.T) {
 	if d.Example != "Hello there!" {
 		t.Errorf("Example = %q", d.Example)
 	}
-	if d.Audio == "" {
-		t.Error("Audio is empty")
-	}
-	if d.Language != "en" {
-		t.Errorf("Language = %q, want en", d.Language)
-	}
-	if d.SourceURL != "https://en.wiktionary.org/wiki/hello" {
-		t.Errorf("SourceURL = %q", d.SourceURL)
+	if d.Phonetic == "" {
+		t.Error("Phonetic should not be empty")
 	}
 }
 
-func TestDefineNotFound(t *testing.T) {
+func TestLookupSynonymsString(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprint(w, fakeLookupJSON)
+	}))
+	defer ts.Close()
+
+	c := newTestClient(ts)
+	defs, err := c.Lookup(context.Background(), "hello")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// defs[0] should have synonyms from meaning ("howdy") + definition ("hi")
+	d := defs[0]
+	if d.Synonyms == "" {
+		t.Error("Synonyms should not be empty for first definition")
+	}
+	// Must be a comma-joined string, not JSON array notation
+	if strings.HasPrefix(d.Synonyms, "[") {
+		t.Errorf("Synonyms looks like JSON array: %q", d.Synonyms)
+	}
+}
+
+func TestLookupNotFound(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = fmt.Fprint(w, fakeNotFoundJSON)
@@ -152,13 +154,16 @@ func TestDefineNotFound(t *testing.T) {
 	defer ts.Close()
 
 	c := newTestClient(ts)
-	_, err := c.Define(context.Background(), "xyznotaword", "en")
+	_, err := c.Lookup(context.Background(), "xyzzy")
 	if err == nil {
 		t.Fatal("expected error for not-found word, got nil")
 	}
+	if !strings.Contains(err.Error(), "no definitions found") {
+		t.Errorf("error message = %q, want it to contain 'no definitions found'", err.Error())
+	}
 }
 
-func TestDefineRetriesOn503(t *testing.T) {
+func TestLookupRetriesOn503(t *testing.T) {
 	var hits int
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits++
@@ -166,7 +171,7 @@ func TestDefineRetriesOn503(t *testing.T) {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			return
 		}
-		_, _ = fmt.Fprint(w, fakeDefineJSON)
+		_, _ = fmt.Fprint(w, fakeLookupJSON)
 	}))
 	defer ts.Close()
 
@@ -176,36 +181,11 @@ func TestDefineRetriesOn503(t *testing.T) {
 	cfg.Retries = 3
 	c := freedictionary.NewClient(cfg)
 
-	_, err := c.Define(context.Background(), "hello", "en")
+	_, err := c.Lookup(context.Background(), "hello")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if hits != 3 {
 		t.Errorf("server saw %d hits, want 3", hits)
-	}
-}
-
-func TestDefineSynonymsDeduped(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = fmt.Fprint(w, fakeDefineJSON)
-	}))
-	defer ts.Close()
-
-	c := newTestClient(ts)
-	defs, err := c.Define(context.Background(), "hello", "en")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(defs) == 0 {
-		t.Fatal("no definitions returned")
-	}
-	// Check that synonyms from meaning-level and definition-level are merged.
-	d := defs[0]
-	synMap := make(map[string]bool)
-	for _, s := range d.Synonyms {
-		if synMap[s] {
-			t.Errorf("duplicate synonym %q in %v", s, d.Synonyms)
-		}
-		synMap[s] = true
 	}
 }
