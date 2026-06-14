@@ -1,0 +1,10 @@
+title       = "freedictionary"
+baseURL     = "https://freedictionary-cli.tamnd.com/"
+description = "A command line for the Free Dictionary API."
+contentDir  = "content"
+outputDir   = "public"
+theme       = "tago-doks"
+syntaxHighlight = "true"
+
+[params]
+github = "https://github.com/tamnd/freedictionary-cli"
