@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -27,11 +27,11 @@ func NewClient(cfg Config) *Client {
 	}
 }
 
-// Define looks up a word in the given language and returns one Definition per
-// meaning. On 404 the API returns a JSON error body; this returns a descriptive
-// error message instead of a raw HTTP error.
-func (c *Client) Define(ctx context.Context, word, lang string) ([]Definition, error) {
-	u := fmt.Sprintf("%s/api/v2/entries/%s/%s", c.cfg.BaseURL, lang, word)
+// Lookup looks up a word and returns one Definition per (meaning x definition)
+// combination. On 404 it returns an error with the message
+// "no definitions found for %q".
+func (c *Client) Lookup(ctx context.Context, word string) ([]Definition, error) {
+	u := fmt.Sprintf("%s/api/v2/entries/en/%s", c.cfg.BaseURL, word)
 	body, status, err := c.get(ctx, u)
 	if err != nil {
 		return nil, err
@@ -39,7 +39,7 @@ func (c *Client) Define(ctx context.Context, word, lang string) ([]Definition, e
 	if status == http.StatusNotFound {
 		var we wireError
 		if jerr := json.Unmarshal(body, &we); jerr == nil && we.Title != "" {
-			return nil, fmt.Errorf("%s", we.Title)
+			return nil, fmt.Errorf("no definitions found for %q", word)
 		}
 		return nil, fmt.Errorf("no definitions found for %q", word)
 	}
@@ -49,86 +49,75 @@ func (c *Client) Define(ctx context.Context, word, lang string) ([]Definition, e
 	}
 	var defs []Definition
 	for _, e := range entries {
-		defs = append(defs, toDefinitions(e, lang)...)
+		defs = append(defs, toDefinitions(e)...)
 	}
 	return defs, nil
 }
 
-// toDefinitions converts one wireEntry into one Definition per meaning.
-func toDefinitions(entry wireEntry, lang string) []Definition {
-	phText, phAudio := bestPhonetic(entry.Phonetics)
-	if phText == "" {
-		phText = entry.Phonetic
-	}
-	source := ""
-	if len(entry.SourceUrls) > 0 {
-		source = entry.SourceUrls[0]
+// toDefinitions converts one wireEntry into one Definition per
+// (meaning, definition) pair.
+func toDefinitions(entry wireEntry) []Definition {
+	phonetic := bestPhonetic(entry.Phonetics)
+	if phonetic == "" {
+		phonetic = entry.Phonetic
 	}
 	var defs []Definition
 	for _, m := range entry.Meanings {
-		syns := make([]string, len(m.Synonyms))
-		copy(syns, m.Synonyms)
-		ants := make([]string, len(m.Antonyms))
-		copy(ants, m.Antonyms)
-		def := ""
-		ex := ""
-		if len(m.Definitions) > 0 {
-			def = m.Definitions[0].Definition
-			ex = m.Definitions[0].Example
-			syns = append(syns, m.Definitions[0].Synonyms...)
-			ants = append(ants, m.Definitions[0].Antonyms...)
+		for _, d := range m.Definitions {
+			// Collect synonyms from meaning-level and definition-level, deduplicated, max 5.
+			syns := joinSynonyms(m.Synonyms, d.Synonyms, 5)
+			defs = append(defs, Definition{
+				Word:         entry.Word,
+				Phonetic:     phonetic,
+				PartOfSpeech: m.PartOfSpeech,
+				Definition:   d.Definition,
+				Example:      d.Example,
+				Synonyms:     syns,
+			})
 		}
-		defs = append(defs, Definition{
-			Word:         entry.Word,
-			Phonetic:     phText,
-			Audio:        phAudio,
-			PartOfSpeech: m.PartOfSpeech,
-			Definition:   def,
-			Example:      ex,
-			Synonyms:     unique(syns),
-			Antonyms:     unique(ants),
-			Language:     lang,
-			SourceURL:    source,
-		})
 	}
 	return defs
 }
 
-// bestPhonetic picks the phonetic text and audio URL from a phonetics slice.
-// It prefers the first entry that has a non-empty audio URL. If none has audio,
-// it falls back to the text of the first entry.
+// bestPhonetic picks the phonetic text from a phonetics slice.
+// It prefers the first entry that has a non-empty audio URL; falls back to
+// the text of the first entry with any text.
 func bestPhonetic(phonetics []struct {
 	Text  string `json:"text"`
 	Audio string `json:"audio"`
-}) (text, audio string) {
+}) string {
 	for _, p := range phonetics {
-		if p.Audio != "" && text == "" {
-			text = p.Text
-			audio = p.Audio
+		if p.Audio != "" && p.Text != "" {
+			return p.Text
 		}
 	}
-	if text == "" && len(phonetics) > 0 {
-		text = phonetics[0].Text
+	for _, p := range phonetics {
+		if p.Text != "" {
+			return p.Text
+		}
 	}
-	return
+	return ""
 }
 
-// unique returns s deduplicated and sorted, with empty strings removed.
-func unique(s []string) []string {
-	seen := make(map[string]struct{}, len(s))
-	out := s[:0:0]
-	for _, v := range s {
-		if v == "" {
+// joinSynonyms merges two synonym slices, deduplicates, and returns the first
+// max entries as a comma-joined string.
+func joinSynonyms(a, b []string, max int) string {
+	seen := make(map[string]struct{}, len(a)+len(b))
+	var out []string
+	for _, s := range append(a, b...) {
+		if s == "" {
 			continue
 		}
-		if _, ok := seen[v]; ok {
+		if _, ok := seen[s]; ok {
 			continue
 		}
-		seen[v] = struct{}{}
-		out = append(out, v)
+		seen[s] = struct{}{}
+		out = append(out, s)
+		if len(out) >= max {
+			break
+		}
 	}
-	sort.Strings(out)
-	return out
+	return strings.Join(out, ", ")
 }
 
 // get performs a retrying GET and returns (body, status, error).
@@ -160,7 +149,7 @@ func (c *Client) do(ctx context.Context, rawURL string) ([]byte, int, bool, erro
 	if err != nil {
 		return nil, 0, false, err
 	}
-	req.Header.Set("User-Agent", "freedictionary-cli/0.1 (github.com/tamnd/freedictionary-cli)")
+	req.Header.Set("User-Agent", "freedictionary-cli/0.1 (tamnd87@gmail.com)")
 	req.Header.Set("Accept", "application/json")
 	resp, err := c.http.Do(req)
 	if err != nil {
