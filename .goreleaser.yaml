@@ -65,45 +65,24 @@ nfpms:
       - rpm
       - apk
 
-dockers:
-  - image_templates:
-      - ghcr.io/tamnd/freedictionary:{{ .Version }}-amd64
+dockers_v2:
+  - images:
+      - ghcr.io/tamnd/freedictionary
+    tags:
+      - "{{ .Version }}"
+      - latest
     dockerfile: Dockerfile
-    use: buildx
-    build_flag_templates:
-      - "--platform=linux/amd64"
-      - "--label=org.opencontainers.image.title={{ .ProjectName }}"
-      - "--label=org.opencontainers.image.description=A command line for the Free Dictionary API."
-      - "--label=org.opencontainers.image.url=https://github.com/tamnd/freedictionary-cli"
-      - "--label=org.opencontainers.image.source=https://github.com/tamnd/freedictionary-cli"
-      - "--label=org.opencontainers.image.version={{ .Version }}"
-      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
-      - "--label=org.opencontainers.image.licenses=Apache-2.0"
-    goarch: amd64
-  - image_templates:
-      - ghcr.io/tamnd/freedictionary:{{ .Version }}-arm64
-    dockerfile: Dockerfile
-    use: buildx
-    build_flag_templates:
-      - "--platform=linux/arm64"
-      - "--label=org.opencontainers.image.title={{ .ProjectName }}"
-      - "--label=org.opencontainers.image.description=A command line for the Free Dictionary API."
-      - "--label=org.opencontainers.image.url=https://github.com/tamnd/freedictionary-cli"
-      - "--label=org.opencontainers.image.source=https://github.com/tamnd/freedictionary-cli"
-      - "--label=org.opencontainers.image.version={{ .Version }}"
-      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
-      - "--label=org.opencontainers.image.licenses=Apache-2.0"
-    goarch: arm64
-
-docker_manifests:
-  - name_template: ghcr.io/tamnd/freedictionary:{{ .Version }}
-    image_templates:
-      - ghcr.io/tamnd/freedictionary:{{ .Version }}-amd64
-      - ghcr.io/tamnd/freedictionary:{{ .Version }}-arm64
-  - name_template: ghcr.io/tamnd/freedictionary:latest
-    image_templates:
-      - ghcr.io/tamnd/freedictionary:{{ .Version }}-amd64
-      - ghcr.io/tamnd/freedictionary:{{ .Version }}-arm64
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    labels:
+      org.opencontainers.image.title: "{{ .ProjectName }}"
+      org.opencontainers.image.description: "A command line for the Free Dictionary API."
+      org.opencontainers.image.url: "https://github.com/tamnd/freedictionary-cli"
+      org.opencontainers.image.source: "https://github.com/tamnd/freedictionary-cli"
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.licenses: "Apache-2.0"
 
 homebrew_casks:
   - name: freedictionary
@@ -151,14 +130,6 @@ signs:
       - "--yes"
     artifacts: checksum
     output: true
-
-docker_signs:
-  - cmd: cosign
-    artifacts: manifests
-    args:
-      - sign
-      - "${artifact}@${digest}"
-      - "--yes"
 
 changelog:
   sort: asc
